@@ -11,6 +11,6 @@ __pycache__/
 
 # Project artifacts
 *.pt
-training_log.csv
+
 training_loss.png
-input.txt
+
