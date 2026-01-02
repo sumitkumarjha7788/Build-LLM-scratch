@@ -10,7 +10,7 @@ __pycache__/
 .vscode/
 
 # Project artifacts
-*.pt
+
 
 training_loss.png
 
