@@ -9,8 +9,12 @@ __pycache__/
 # VS Code
 .vscode/
 
-# Project artifacts
-
-
+# Project artifacts (Large files)
+*.txt
+*.pt
 training_loss.png
-
+plots/
+checkpoints/
+*.csv
+!requirements.txt
+!demo.md

@@ -36,31 +36,41 @@ n_head = 6
 n_layer = 6
 dropout = 0.2
 
-# Data Preparation
-url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-file_path = "input.txt"
+from model_utils import ModelConfig, SimpleTokenizer
+from model import GPTLanguageModel
 
-if not os.path.exists(file_path):
-    print("Downloading dataset...")
-    try:
+# Data Preparation
+dataset_name = "tinystories" # Set to "tinyshakespeare" or "tinystories"
+if dataset_name == "tinyshakespeare":
+    url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+    file_path = "input.txt"
+    if not os.path.exists(file_path):
+        print("Downloading tinyshakespeare...")
         data = requests.get(url).text
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(data)
-    except Exception as e:
-        print(f"Failed to download data: {e}")
-        exit(1)
-else:
-    print("Dataset already exists.")
     with open(file_path, 'r', encoding='utf-8') as f:
         data = f.read()
+    tokenizer = SimpleTokenizer(text=data)
+elif dataset_name == "tinystories":
+    file_path = "tinystories.txt"
+    vocab_path = "vocab.txt"
+    if not os.path.exists(file_path):
+        print("TinyStories not found. Please run prepare_dataset.py first.")
+        # Fallback to tinyshakespeare for demo if needed, but here we expect the user to run it
+        exit(1)
+    
+    tokenizer = SimpleTokenizer.load_vocab(vocab_path)
+    # For large datasets, we might not want to load everything into memory
+    # But for this script, we'll try to read a reasonable chunk or handle it if it fits
+    print("Loading TinyStories...")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        # Read first 100MB for training if it's too large, or whole file if possible
+        data = f.read(100 * 1024 * 1024) 
 
-# Tokenization
-chars = sorted(list(set(data)))
-vocab_size = len(chars)
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+vocab_size = tokenizer.vocab_size
+encode = tokenizer.encode
+decode = tokenizer.decode
 
 # Data Splits
 data_tensor = torch.tensor(encode(data), dtype=torch.long)

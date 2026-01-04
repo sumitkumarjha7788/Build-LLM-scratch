@@ -1,28 +1,37 @@
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
+from config import ModelConfig
 
-@dataclass
-class ModelConfig:
-    vocab_size: int = 65
-    block_size: int = 256
-    n_embd: int = 384
-    n_head: int = 6
-    n_layer: int = 6
-    dropout: float = 0.2
-    n_kv_head: Optional[int] = None # For GQA. If None, defaults to n_head (MHA)
-    use_flash_attention: bool = True
-    use_moe: bool = False
-    num_experts: int = 8
-    num_experts_per_tok: int = 2
-    rope_scaling_factor: float = 1.0 # Linear scaling factor for context extension
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+class SimpleTokenizer:
+    """ A simple character-level tokenizer. """
+    def __init__(self, chars: Optional[List[str]] = None, text: Optional[str] = None):
+        if chars:
+            self.chars = sorted(list(set(chars)))
+        elif text:
+            self.chars = sorted(list(set(text)))
+        else:
+            self.chars = []
+        
+        self.vocab_size = len(self.chars)
+        self.stoi = { ch:i for i,ch in enumerate(self.chars) }
+        self.itos = { i:ch for i,ch in enumerate(self.chars) }
+        
+    def encode(self, s: str) -> List[int]:
+        return [self.stoi[c] for c in s if c in self.stoi]
+        
+    def decode(self, l: List[int]) -> str:
+        return ''.join([self.itos[i] for i in l if i in self.itos])
 
-    def __post_init__(self):
-        if self.n_kv_head is None:
-            self.n_kv_head = self.n_head
-        assert self.n_head % self.n_kv_head == 0, "n_head must be divisible by n_kv_head"
+    def save_vocab(self, path: str):
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write("".join(self.chars))
+            
+    @classmethod
+    def load_vocab(cls, path: str):
+        with open(path, 'r', encoding='utf-8') as f:
+            chars = list(f.read())
+        return cls(chars=chars)
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, scaling_factor: float = 1.0) -> torch.Tensor:
     """
