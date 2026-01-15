@@ -5,12 +5,40 @@ from model_utils import ModelConfig, precompute_freqs_cis
 from attention import GroupedQueryAttention, MultiHeadLatentAttention
 from moe import DynamicRouterMoE, DeepSeekMoE
 
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        try:
+            output = self._norm(x.float()).type_as(x)
+            return output * self.weight
+        except RuntimeError as e:
+            if "no kernel image" in str(e):
+                # Fallback to CPU for RTX 5070 compatibility if CUDA kernel is missing
+                device = x.device
+                x_cpu = x.cpu()
+                self.weight.data = self.weight.data.cpu()
+                
+                output = self._norm(x_cpu.float()).type_as(x_cpu)
+                res = output * self.weight
+                
+                # Move back to original device (and weight too, to keep state consistent-ish)
+                self.weight.data = self.weight.data.to(device)
+                return res.to(device)
+            raise e
+
 class FeedForward(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(4 * config.n_embd, config.n_embd),
             nn.Dropout(config.dropout),
         )
@@ -37,8 +65,8 @@ class Block(nn.Module):
             self.ffwd = FeedForward(config)
 
             
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.ln1 = RMSNorm(config.n_embd)
+        self.ln2 = RMSNorm(config.n_embd)
 
     def forward(self, x, freqs_cis):
         # Pass freqs_cis to self-attention for RoPE
@@ -55,7 +83,7 @@ class GPTLanguageModel(nn.Module):
         # Note: No absolute position embedding table anymore! RoPE handles it.
         
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
-        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.ln_f = RMSNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
 
         # Precompute RoPE frequencies
@@ -103,8 +131,14 @@ class GPTLanguageModel(nn.Module):
         freqs_cis = self.freqs_cis[:T].to(device)
 
         # 3. Transformer Blocks
+        from torch.utils.checkpoint import checkpoint
+        
         for block in self.blocks:
-            x = block(x, freqs_cis)
+            if self.config.use_gradient_checkpointing and self.training:
+                # Checkpointing trades compute for memory
+                x = checkpoint(block, x, freqs_cis, use_reentrant=False)
+            else:
+                x = block(x, freqs_cis)
             
         x = self.ln_f(x)
         logits = self.lm_head(x)

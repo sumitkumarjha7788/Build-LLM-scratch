@@ -13,6 +13,12 @@ def main():
                        choices=['baseline', 'deepseek_v3', 'deepseek_r1'])
     parser.add_argument('--dataset', type=str, default='tinystories')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--grad_accum', type=int, default=None, help="Gradient accumulation steps")
+    parser.add_argument('--use_amp', type=str, default=None, help="Use Mixed Precision (True/False)")
+    parser.add_argument('--amp_dtype', type=str, default=None, choices=["fp16", "bf16"])
+    parser.add_argument('--use_checkpoint', type=str, default=None, help="Use Gradient Checkpointing (True/False)")
+    parser.add_argument('--low_memory', action='store_true', help="Presets for 8GB GPUs")
     args = parser.parse_args()
 
     # 1. Config
@@ -32,6 +38,27 @@ def main():
         print(f"GPU Name: {torch.cuda.get_device_name(0)}")
     config.dataset_name = args.dataset
     
+    # CLI Overrides for Memory
+    if args.batch_size:
+        config.training.batch_size = args.batch_size
+    if args.grad_accum:
+        config.training.gradient_accumulation_steps = args.grad_accum
+    if args.use_amp is not None:
+        config.training.use_mixed_precision = args.use_amp.lower() == "true"
+    if args.amp_dtype:
+        config.training.mixed_precision_dtype = args.amp_dtype
+    if args.use_checkpoint is not None:
+        config.model.use_gradient_checkpointing = args.use_checkpoint.lower() == "true"
+
+    # Low Memory Mode Presets
+    if args.low_memory:
+        print(">>> Enabling Low Memory Mode Presets <<<")
+        config.training.batch_size = 4 # Small micro-batch
+        config.training.gradient_accumulation_steps = 16 # Adjust accumulation to keep effective batch size
+        config.training.use_mixed_precision = True
+        config.training.mixed_precision_dtype = "bf16" if torch.cuda.is_available() else "fp16"
+        config.model.use_gradient_checkpointing = True
+
     # Adjust config based on model type
     if args.model_type == 'deepseek_v3':
         config.model.attention_type = 'mla'

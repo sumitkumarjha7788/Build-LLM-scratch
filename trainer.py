@@ -16,8 +16,14 @@ class Trainer:
         self.scheduler = scheduler
         self.device = config.model.device
         
+        # Memory Optimizations: Set environment variable for memory fragmentation
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        
         self.start_iter = 0
         self.best_val_loss = float('inf')
+        
+        # AMP Scaler
+        self.scaler = torch.amp.GradScaler('cuda', enabled=(self.device != 'cpu' and config.training.use_mixed_precision))
         
         # Prepare directories
         os.makedirs(config.training.checkpoint_dir, exist_ok=True)
@@ -53,15 +59,37 @@ class Trainer:
                      raise RuntimeError("Dataset is empty or failed to load. Please check data source.")
 
         for i in range(self.start_iter, self.config.training.max_iters):
-            xb, yb = get_batch()
-
-            xb, yb = xb.to(self.device), yb.to(self.device)
-
-            # Forward & Backward
-            logits, loss = self.model(xb, yb)
             self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            self.optimizer.step()
+            accum_loss = 0.0
+            
+            # Gradient Accumulation Loop
+            grad_accum_steps = self.config.training.gradient_accumulation_steps
+            for _ in range(grad_accum_steps):
+                xb, yb = get_batch()
+                xb, yb = xb.to(self.device), yb.to(self.device)
+
+                # Mixed Precision (AMP) Context
+                use_amp = self.device != 'cpu' and self.config.training.use_mixed_precision
+                if use_amp:
+                    dtype = torch.bfloat16 if self.config.training.mixed_precision_dtype == "bf16" else torch.float16
+                else:
+                    dtype = torch.float32 # fallback
+                
+                with torch.amp.autocast(device_type='cuda' if 'cuda' in self.device else self.device, 
+                                       dtype=dtype, enabled=use_amp):
+                    logits, loss = self.model(xb, yb)
+                    # Normalize loss for accumulation
+                    loss = loss / grad_accum_steps
+                
+                self.scaler.scale(loss).backward()
+                accum_loss += loss.item() * grad_accum_steps # Denormalize for logging
+            
+            # Gradient Clipping
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
             if self.scheduler:
                 self.scheduler.step()
@@ -69,11 +97,11 @@ class Trainer:
             # Evaluation
             if i % self.config.training.eval_interval == 0 or i == self.config.training.max_iters - 1:
                 val_loss = self.evaluate()
-                print(f"step {i}: train loss {loss.item():.4f}, val loss {val_loss:.4f}")
+                print(f"step {i}: train loss {accum_loss:.4f}, val loss {val_loss:.4f}")
                 
                 # Log
                 with open(log_file, "a") as f:
-                    f.write(f"{i},{loss.item():.4f},{val_loss:.4f}\n")
+                    f.write(f"{i},{accum_loss:.4f},{val_loss:.4f}\n")
                 
                 # Checkpointing
                 if val_loss < self.best_val_loss:

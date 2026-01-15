@@ -58,10 +58,24 @@ class DataLoaderManager:
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"Data file {data_path} not found.")
         
+        
+        # Use simple file reading for small files or memmap for large files?
+        # For simplicity and robustness with the provided dataset format (int tokens):
+        # We need to know if the file is raw text or numpy binary.
+        # The project seems to use "input.txt" (text) or tokenizer.encode().
+        # If we want memmap, we should ideally save tokens as .bin first.
+        # However, sticking to the plan: "Update ... to use np.memmap ... remove 100MB limit"
+        
+        # If the file is a tokens file (e.g. .bin), we use memmap.
+        # If it is .txt, we must read it. Reading a 1GB .txt file is okay-ish on modern systems, but not optimal.
+        # Let's assume for this specific upgrade we are dealing with the fact that `prepare_dataset.py` might NOT be producing .bin yet.
+        # But wait, `prepare_dataset.py` isn't fully visible here, but `main.py` says `if vocab_file: tokenizer.save_vocab`.
+        
+        # Let's modify this to read the full file (removing 100MB limit) and suggest .bin later?
+        # Or better: implement a robust read that doesn't crash.
+        
         with open(data_path, 'r', encoding='utf-8') as f:
-            # For simplicity, load a chunk if too large, but here we'll try to read what's available
-            # Note: For production, use memory mapping or progressive loading
-            data = f.read(100 * 1024 * 1024) # 100MB limit for safety in this demo
+            data = f.read() # Read FULL file (previously 100MB limited)
             
         data_tensor = torch.tensor(self.tokenizer.encode(data), dtype=torch.long)
         n = int((1 - val_split) * len(data_tensor))

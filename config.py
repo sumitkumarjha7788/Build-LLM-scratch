@@ -2,6 +2,20 @@ import torch
 from dataclasses import dataclass, field
 from typing import Optional, List
 
+def check_device():
+    if not torch.cuda.is_available():
+        return 'cpu'
+    
+    try:
+        # Try a simple small tensor operation to verify CUDA is functional
+        # detected sm_120 (RTX 5070) often fails with current torch stable
+        x = torch.tensor([1.0], device='cuda')
+        y = x * 2.0
+        return 'cuda'
+    except RuntimeError:
+        print("Warning: CUDA is available but non-functional (likely architecture mismatch). Falling back to CPU.")
+        return 'cpu'
+
 @dataclass
 class ModelConfig:
     # Architecture
@@ -38,7 +52,7 @@ class ModelConfig:
     rope_scaling_factor: float = 1.0
     
     # Device
-    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device: str = field(default_factory=check_device)
 
     def __post_init__(self):
         if self.n_kv_head is None:
@@ -54,6 +68,12 @@ class TrainingConfig:
     eval_interval: int = 500
     eval_iters: int = 200
     weight_decay: float = 0.1
+    
+    # Memory Optimizations
+    gradient_accumulation_steps: int = 1
+    use_mixed_precision: bool = True
+    mixed_precision_dtype: str = "bf16" # "fp16" or "bf16"
+    use_gradient_checkpointing: bool = False
     
     # SFT / Alignment
     sft_epochs: int = 2
