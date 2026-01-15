@@ -61,9 +61,12 @@ class EvaluationSuite:
         return correct / len(questions)
 
 if __name__ == "__main__":
-    # Test with dummy model
-    from config import ModelConfig
+    from model_registry import ModelRegistry
+    from config import ModelConfig, GlobalConfig
     config = ModelConfig(vocab_size=128, block_size=128, n_embd=128, n_head=4, n_layer=2)
+    # Use registry to build
+    from model import GPTLanguageModel # Or ensure registry is loaded
+    # Simple registry mock if needed, or just build directly for test
     model = GPTLanguageModel(config)
     tokenizer = SimpleTokenizer(chars=[chr(i) for i in range(128)]) # full ASCII dummy
     

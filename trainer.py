@@ -39,12 +39,21 @@ class Trainer:
         # but adaptable for standard PyTorch DataLoaders
         train_iter = iter(self.train_loader)
 
-        for i in range(self.start_iter, self.config.training.max_iters):
+        # Helper for infinite loading
+        def get_batch():
+            nonlocal train_iter
             try:
-                xb, yb = next(train_iter)
+                return next(train_iter)
             except StopIteration:
                 train_iter = iter(self.train_loader)
-                xb, yb = next(train_iter)
+                try:
+                    return next(train_iter)
+                except StopIteration:
+                     # This implies dataset is completely empty or empty
+                     raise RuntimeError("Dataset is empty or failed to load. Please check data source.")
+
+        for i in range(self.start_iter, self.config.training.max_iters):
+            xb, yb = get_batch()
 
             xb, yb = xb.to(self.device), yb.to(self.device)
 

@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from model_utils import ModelConfig, precompute_freqs_cis
-from attention import GroupedQueryAttention
-from moe import DynamicRouterMoE
+from attention import GroupedQueryAttention, MultiHeadLatentAttention
+from moe import DynamicRouterMoE, DeepSeekMoE
 
 class FeedForward(nn.Module):
     def __init__(self, config: ModelConfig):
@@ -21,12 +21,21 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
-        self.sa = GroupedQueryAttention(config)
+        # Attention Switch
+        if getattr(config, 'attention_type', 'gqa') == 'mla':
+            self.sa = MultiHeadLatentAttention(config)
+        else:
+            self.sa = GroupedQueryAttention(config)
         
+        # FFN / MoE Switch
         if config.use_moe:
-            self.ffwd = DynamicRouterMoE(config)
+            if getattr(config, 'moe_type', 'standard') == 'deepseek':
+                self.ffwd = DeepSeekMoE(config)
+            else:
+                self.ffwd = DynamicRouterMoE(config)
         else:
             self.ffwd = FeedForward(config)
+
             
         self.ln1 = nn.LayerNorm(config.n_embd)
         self.ln2 = nn.LayerNorm(config.n_embd)
@@ -73,7 +82,21 @@ class GPTLanguageModel(nn.Module):
         device = idx.device
         
         # 1. Token Embeddings
-        x = self.token_embedding_table(idx) # (B,T,C)
+        # 1. Token Embeddings
+        try:
+            x = self.token_embedding_table(idx) # (B,T,C)
+        except RuntimeError as e:
+            if "no kernel image" in str(e):
+                # Fallback for RTX 50-series where Embedding kernel is missing
+                # Move embedding layer to CPU if not already
+                if self.token_embedding_table.weight.device.type != 'cpu':
+                    self.token_embedding_table.cpu()
+                
+                # Compute on CPU
+                x = self.token_embedding_table(idx.cpu())
+                x = x.to(device) # Move back to GPU
+            else:
+                raise e
         
         # 2. Prepare RoPE frequencies for this sequence length
         # freqs_cis is (Max_Len, Head_Dim/2), we need (T, Head_Dim/2)

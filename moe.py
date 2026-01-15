@@ -99,4 +99,72 @@ class DynamicRouterMoE(nn.Module):
                     # Note: In-place addition with boolean indexing works in PyTorch
                     final_output[token_mask] += weights[token_mask] * expert_out
 
+
         return final_output.view(B, T, C)
+
+class DeepSeekMoE(nn.Module):
+    """
+    DeepSeek-V3 MoE Architecture.
+    Key features:
+    1. Shared Experts: Constantly active experts for common knowledge.
+    2. Fine-Grained Routed Experts: Select top-k from many small experts.
+    3. Aux-Less Load Balancing: Bias-based routing update (Simplified version).
+    """
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.num_experts_per_tok = config.num_experts_per_tok
+        self.num_shared_experts = getattr(config, 'num_shared_experts', 1)
+        self.n_embd = config.n_embd
+        
+        # 1. Shared Experts (Always active)
+        self.shared_experts = nn.ModuleList([Expert(config) for _ in range(self.num_shared_experts)])
+        
+        # 2. Routed Experts (Selected via Top-K)
+        self.routed_experts = nn.ModuleList([Expert(config) for _ in range(self.num_experts)])
+        
+        # 3. Router
+        self.router = nn.Linear(self.n_embd, self.num_experts, bias=False)
+        
+        # 4. Bias for Load Balancing (Aux-free)
+        # We learn a bias term that adjusts the probability of selecting an expert.
+        # In full DeepSeek-V3, this is updated via a specific rule, but here we can make it learnable 
+        # or implement the explicit update logic in the training loop (requires exposing stats).
+        # For this modular implementation, we'll make it a learnable parameter initialized to 0.
+        self.expert_bias = nn.Parameter(torch.zeros(self.num_experts))
+
+    def forward(self, x):
+        B, T, C = x.shape
+        x_flat = x.view(-1, C)
+        
+        # --- Shared Experts Path ---
+        # Sum of all shared experts (or concat? Usually sum or weighted sum. DeepSeek uses sum/add)
+        shared_output = torch.zeros_like(x_flat)
+        for expert in self.shared_experts:
+            shared_output += expert(x_flat)
+            
+        # --- Routed Experts Path ---
+        # Logits + Bias
+        router_logits = self.router(x_flat) + self.expert_bias
+        
+        # Top-K
+        routing_weights, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1)
+        routing_weights = F.softmax(routing_weights, dim=-1, dtype=torch.float).to(x.dtype)
+        
+        routed_output = torch.zeros_like(x_flat)
+        
+        # Iterate over k choices (Naive loop for readability, same as DynamicRouterMoE)
+        for k in range(self.num_experts_per_tok):
+            expert_indices = selected_experts[:, k]
+            weights = routing_weights[:, k].unsqueeze(1)
+            
+            for i, expert in enumerate(self.routed_experts):
+                token_mask = (expert_indices == i)
+                if token_mask.any():
+                    routed_output[token_mask] += weights[token_mask] * expert(x_flat[token_mask])
+
+        # Combine
+        final_output = shared_output + routed_output
+        
+        return final_output.view(B, T, C)
+

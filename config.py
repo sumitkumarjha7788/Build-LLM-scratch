@@ -20,8 +20,19 @@ class ModelConfig:
     
     # MoE
     use_moe: bool = False
+    moe_type: str = "standard" # "standard" or "deepseek"
     num_experts: int = 8
     num_experts_per_tok: int = 2
+    num_shared_experts: int = 1 # For DeepSeekMoE
+    
+    # Attention
+    attention_type: str = "gqa" # "gqa", "mla"
+    q_lora_rank: Optional[int] = None # For MLA compression
+    kv_lora_rank: int = 512 # For MLA compression
+    
+    # R1 / Reasoning
+    is_reasoning_model: bool = False
+    max_reasoning_steps: int = 2048
     
     # Scaling
     rope_scaling_factor: float = 1.0
